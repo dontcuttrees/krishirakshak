@@ -118,14 +118,37 @@ def generate_advisory(farmer, alert):
 # -------------------------------------------------------------
 # 3. TEXT-TO-SPEECH (IVR AUDIO CREATOR)
 # -------------------------------------------------------------
-def create_ivr_audio(text, filename):
+async def generate_audio_async(text, voice, filepath):
+    cleaned_text = text.replace('"', '').replace('*', '').replace('\n', ' ').strip()
+    if not cleaned_text:
+        return
+    communicate = edge_tts.Communicate(cleaned_text, voice)
+    await communicate.save(filepath)
+
+def create_ivr_audio(text, lang, filename):
+    if not text or not str(text).strip():
+        return None
+    filepath = os.path.join("audio_broadcasts", filename)
+    voice_candidates = (
+        ["or-IN-SukantNeural", "hi-IN-MadhurNeural", "en-IN-PrabhatNeural"]
+        if lang.lower() == "odia"
+        else ["hi-IN-MadhurNeural", "hi-IN-SwaraNeural", "en-IN-PrabhatNeural"]
+    )
+    for voice in voice_candidates:
+        try:
+            asyncio.run(generate_audio_async(text, voice, filepath))
+            if os.path.exists(filepath) and os.path.getsize(filepath) > 0:
+                return filepath
+        except Exception:
+            continue
     try:
+        from gtts import gTTS
         tts = gTTS(text=text, lang='hi', slow=False)
-        filepath = os.path.join("audio_broadcasts", filename)
         tts.save(filepath)
         return filepath
     except Exception as e:
-        return f"Audio error: {e}"
+        print(f"⚠️ Audio fallback failed for {filename}: {e}")
+        return None
 
 # -------------------------------------------------------------
 # 4. EXECUTION PIPELINE

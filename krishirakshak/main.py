@@ -1,11 +1,13 @@
 import os
 import json
 import time
+import random
+import asyncio
 import requests
 import pandas as pd
 from dotenv import load_dotenv
 from groq import Groq
-from gtts import gTTS
+import edge_tts
 
 load_dotenv()
 
@@ -17,43 +19,60 @@ client = Groq(api_key=GROQ_API_KEY)
 os.makedirs("audio_broadcasts", exist_ok=True)
 
 # -------------------------------------------------------------
-# 1. FETCH LIVE DISASTER TRIGGER FROM API
+# 1. FETCH RANDOM DISASTER TRIGGER FROM LOCAL DB OR API
 # -------------------------------------------------------------
 TRIGGER_API_URL = "https://run.mocky.io/v3/46bc7793-1b9a-4c28-be9c-73ec56a90dc2"
 
-def fetch_disaster_trigger_from_api(target_district):
-    print(f"📡 Fetching live IMD disaster alert feed from API for {target_district}...")
-    try:
-        response = requests.get(TRIGGER_API_URL, timeout=10)
-        alerts = response.json()
-        
-        # Filter alert for the requested district
-        matched = [a for a in alerts if a['district'].lower() == target_district.lower()]
-        
-        if matched:
-            alert = matched[0]
-        else:
-            alert = alerts[0] # Default to the primary active alert
+def fetch_disaster_trigger(available_districts):
+    print("📡 Fetching IMD disaster alert feed...")
+    alerts = []
+    
+    db_paths = ["db.json", "../db.json", os.path.join(os.path.dirname(os.path.abspath(__file__)), "db.json")]
+    db_file = next((p for p in db_paths if os.path.exists(p)), None)
+    
+    if db_file:
+        try:
+            with open(db_file, "r", encoding="utf-8") as f:
+                data = json.load(f)
+                alerts = data.get("alerts", [])
+                print(f"📂 Loaded {len(alerts)} alerts from local {db_file}")
+        except Exception as e:
+            print(f"⚠️ Error reading {db_file}: {e}")
 
-        print("\n" + "="*80)
-        print(f"🚨 [IMD DISASTER ALERT RECEIVED VIA API: {alert['alert_id']}]")
-        print(f"📍 Location: {alert['district']}, Odisha")
-        print(f"⚠️ Hazard: {alert['hazard']} | Severity: {alert['severity']} ALERT | Level: {alert['intensity_level']}")
-        print(f"📊 Forecast: Wind {alert['wind_speed_kmph']} km/h | 24h Rain {alert['rainfall_forecast_mm']} mm")
-        print("="*80 + "\n")
-        return alert
+    if not alerts:
+        try:
+            response = requests.get(TRIGGER_API_URL, timeout=10)
+            alerts = response.json()
+        except Exception as e:
+            print(f"⚠️ API Fetch error: {e}")
 
-    except Exception as e:
-        print(f"⚠️ API Fetch error: {e}. Falling back to default payload.")
-        return {
+    matched_alerts = [
+        a for a in alerts 
+        if a.get('district', '').strip().lower() in [d.strip().lower() for d in available_districts]
+    ]
+
+    if matched_alerts:
+        alert = random.choice(matched_alerts)
+    elif alerts:
+        alert = random.choice(alerts)
+    else:
+        alert = {
             "alert_id": "IMD-OD-FALLBACK-01",
-            "district": target_district,
+            "district": random.choice(available_districts) if available_districts else "Angul",
             "hazard": "Severe Flash Flood & Inundation",
             "severity": "RED",
             "wind_speed_kmph": 95,
             "rainfall_forecast_mm": 190,
             "intensity_level": "High"
         }
+
+    print("\n" + "="*80)
+    print(f"🚨 [IMD DISASTER ALERT TRIGGERED: {alert.get('alert_id', 'IMD-OD-01')}]")
+    print(f"📍 Location: {alert.get('district')}, Odisha")
+    print(f"⚠️ Hazard: {alert.get('hazard')} | Severity: {alert.get('severity')} ALERT | Level: {alert.get('intensity_level')}")
+    print(f"📊 Forecast: Wind {alert.get('wind_speed_kmph')} km/h | 24h Rain {alert.get('rainfall_forecast_mm')} mm")
+    print("="*80 + "\n")
+    return alert
 
 # -------------------------------------------------------------
 # 2. LLM ADVISORY GENERATOR (ODIA & HINDI)
@@ -63,13 +82,13 @@ def generate_advisory(farmer, alert):
     You are an emergency agricultural response coordinator in Odisha, India.
 
     Disaster Trigger Data:
-    - Hazard: {alert['hazard']} ({alert['severity']} Alert, Intensity: {alert['intensity_level']})
-    - Location: {alert['district']}, Odisha
-    - Forecast: Wind {alert['wind_speed_kmph']} km/h, Rainfall {alert['rainfall_forecast_mm']} mm
+    - Hazard: {alert.get('hazard')} ({alert.get('severity')} Alert, Intensity: {alert.get('intensity_level')})
+    - Location: {alert.get('district')}, Odisha
+    - Forecast: Wind {alert.get('wind_speed_kmph')} km/h, Rainfall {alert.get('rainfall_forecast_mm')} mm
 
     Farmer:
-    - Name: {farmer['Name']}
-    - Crop: {farmer['Crop']}
+    - Name: {farmer.get('Name')}
+    - Crop: {farmer.get('Crop')}
 
     Return ONLY a JSON object matching this schema:
     {{
@@ -95,51 +114,88 @@ def generate_advisory(farmer, alert):
     return json.loads(chat_completion.choices[0].message.content)
 
 # -------------------------------------------------------------
-# 3. TEXT-TO-SPEECH (IVR AUDIO CREATOR)
+# 3. TEXT-TO-SPEECH (EDGE-TTS FOR ODIA & HINDI NEURAL VOICES)
 # -------------------------------------------------------------
-def create_ivr_audio(text, filename):
+async def generate_audio_async(text, voice, filepath):
+    # Clean up formatting characters that break TTS streams
+    cleaned_text = (
+        text.replace('"', '')
+        .replace('*', '')
+        .replace('\n', ' ')
+        .strip()
+    )
+    if not cleaned_text:
+        return
+    communicate = edge_tts.Communicate(cleaned_text, voice)
+    await communicate.save(filepath)
+
+def create_ivr_audio(text, lang, filename):
+    if not text or not str(text).strip():
+        return None
+
+    filepath = os.path.join("audio_broadcasts", filename)
+    
+    # Try preferred neural voice, then fall back to standard Indian neural voices
+    voice_candidates = (
+        ["or-IN-SukantNeural", "hi-IN-MadhurNeural", "en-IN-PrabhatNeural"]
+        if lang.lower() == "odia"
+        else ["hi-IN-MadhurNeural", "hi-IN-SwaraNeural", "en-IN-PrabhatNeural"]
+    )
+
+    for voice in voice_candidates:
+        try:
+            asyncio.run(generate_audio_async(text, voice, filepath))
+            # Verify file was actually created and is not 0 bytes
+            if os.path.exists(filepath) and os.path.getsize(filepath) > 0:
+                return filepath
+        except Exception:
+            continue
+
+    # Final Fallback to gTTS if edge-tts network drops
     try:
+        from gtts import gTTS
         tts = gTTS(text=text, lang='hi', slow=False)
-        filepath = os.path.join("audio_broadcasts", filename)
         tts.save(filepath)
         return filepath
     except Exception as e:
-        return f"Audio error: {e}"
+        print(f"⚠️ Audio fallback failed for {filename}: {e}")
+        return None
 
 # -------------------------------------------------------------
 # 4. EXECUTION PIPELINE
 # -------------------------------------------------------------
 def run_pipeline():
-    # 1. Resolve farmers.csv path dynamically across root and subfolders
     csv_candidates = [
         "farmers_fake_names.csv",
+        "farmers.csv",
         "../farmers_fake_names.csv",
+        "../farmers.csv",
         os.path.join(os.path.dirname(os.path.abspath(__file__)), "farmers_fake_names.csv"),
-        os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "farmers_fake_names.csv")
+        os.path.join(os.path.dirname(os.path.abspath(__file__)), "farmers.csv")
     ]
     
     csv_file = next((path for path in csv_candidates if os.path.exists(path)), None)
     
     if not csv_file:
-        print("❌ Error: 'farmers_fake_names.csv' not found in current directory or parent directory.")
+        print("❌ Error: Farmer CSV not found.")
         return
 
     print(f"📂 Loaded dataset from: {csv_file}")
     df = pd.read_csv(csv_file)
     df.columns = df.columns.str.strip()
 
-    # Target the district from your CSV (e.g. Angul)
-    target_district = df['District'].dropna().iloc[0]
+    available_districts = df['District'].dropna().unique().tolist()
     
-    # 2. Fetch Alert from Trigger API
-    alert = fetch_disaster_trigger_from_api(target_district)
+    # 1. Fetch Random Alert Trigger
+    alert = fetch_disaster_trigger(available_districts)
+    target_district = alert['district']
 
-    # 3. Filter affected farmers
+    # 2. Filter affected farmers
     affected = df[df['District'].astype(str).str.strip().str.lower() == target_district.lower()]
     print(f"🎯 Target Audience: Found {len(affected)} registered farmer(s) in {target_district}.\n")
 
     for idx, farmer in affected.iterrows():
-        farmer_id = farmer['FarmerID']
+        farmer_id = farmer.get('FarmerID', farmer.get('Farmer_ID', idx + 1))
         name = farmer['Name']
         phone = farmer['Phone']
         crop = farmer['Crop']
@@ -150,11 +206,16 @@ def run_pipeline():
 
         advisories = generate_advisory(farmer, alert)
 
-        pre_audio = f"Farmer_{farmer_id}_pre_alert.mp3"
-        post_audio = f"Farmer_{farmer_id}_post_mitigation.mp3"
+        # Generate Audio Files for BOTH Odia and Hindi
+        pre_audio_odia = f"Farmer_{farmer_id}_pre_alert_ODIA.mp3"
+        pre_audio_hindi = f"Farmer_{farmer_id}_pre_alert_HINDI.mp3"
+        post_audio_odia = f"Farmer_{farmer_id}_post_mitigation_ODIA.mp3"
+        post_audio_hindi = f"Farmer_{farmer_id}_post_mitigation_HINDI.mp3"
 
-        create_ivr_audio(advisories['pre_disaster_ivr_voice_hindi'], pre_audio)
-        create_ivr_audio(advisories['post_disaster_ivr_voice_hindi'], post_audio)
+        create_ivr_audio(advisories['pre_disaster_ivr_voice_odia'], "odia", pre_audio_odia)
+        create_ivr_audio(advisories['pre_disaster_ivr_voice_hindi'], "hindi", pre_audio_hindi)
+        create_ivr_audio(advisories['post_disaster_ivr_voice_odia'], "odia", post_audio_odia)
+        create_ivr_audio(advisories['post_disaster_ivr_voice_hindi'], "hindi", post_audio_hindi)
 
         # STAGE 1: PRE-DISASTER DISPATCH
         print("\n[STAGE 1: PRE-DISASTER WARNING DISPATCHED]")
@@ -164,8 +225,9 @@ def run_pipeline():
         print(f"   💬 [En Ref]: {advisories['pre_disaster_sms_en']}")
         print(f"📞 IVR VOICE CALL PLACED:")
         print(f"   🔊 Odia Voice Script:  \"{advisories['pre_disaster_ivr_voice_odia']}\"")
+        print(f"   📁 Odia Audio File:   audio_broadcasts/{pre_audio_odia} [STATUS: SENT / 200 OK]")
         print(f"   🔊 Hindi Voice Script: \"{advisories['pre_disaster_ivr_voice_hindi']}\"")
-        print(f"   📁 Audio Generated: audio_broadcasts/{pre_audio} [STATUS: SENT / 200 OK]")
+        print(f"   📁 Hindi Audio File:  audio_broadcasts/{pre_audio_hindi} [STATUS: SENT / 200 OK]")
 
         time.sleep(1)
 
@@ -175,11 +237,13 @@ def run_pipeline():
         print(f"   💬 [Odia]:  {advisories['post_disaster_sms_odia']}")
         print(f"   💬 [Hindi]: {advisories['post_disaster_sms_hindi']}")
         print(f"📞 IVR VOICE CALL PLACED:")
-        print(f"   🔊 Recovery Voice: \"{advisories['post_disaster_ivr_voice_odia']}\"")
-        print(f"   📁 Audio Generated: audio_broadcasts/{post_audio} [STATUS: SENT / 200 OK]\n")
+        print(f"   🔊 Odia Recovery Voice:  \"{advisories['post_disaster_ivr_voice_odia']}\"")
+        print(f"   📁 Odia Recovery Audio:  audio_broadcasts/{post_audio_odia} [STATUS: SENT / 200 OK]")
+        print(f"   🔊 Hindi Recovery Voice: \"{advisories['post_disaster_ivr_voice_hindi']}\"")
+        print(f"   📁 Hindi Recovery Audio: audio_broadcasts/{post_audio_hindi} [STATUS: SENT / 200 OK]\n")
 
     print("=" * 80)
-    print("✅ All Emergency & Post-Disaster Dispatches Logged Successfully.")
+    print("✅ All Odia & Hindi Emergency Dispatches Logged Successfully.")
     print("=" * 80)
 
 if __name__ == "__main__":

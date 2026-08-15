@@ -1,0 +1,13 @@
+{
+  "alerts": [
+    {
+      "alert_id": "IMD-OD-ANG-01",
+      "district": "Angul",
+      "hazard": "Very Severe Flash Flood & Gale Storm",
+      "severity": "RED",
+      "wind_speed_kmph": 110,
+      "rainfall_forecast_mm": 215,
+      "intensity_level": "High"
+    }
+  ]
+}

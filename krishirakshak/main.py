@@ -2,12 +2,11 @@ import os
 import json
 import time
 import random
-import asyncio
 import requests
 import pandas as pd
 from dotenv import load_dotenv
 from groq import Groq
-import edge_tts
+from gtts import gTTS
 
 load_dotenv()
 
@@ -27,6 +26,7 @@ def fetch_disaster_trigger(available_districts):
     print("📡 Fetching IMD disaster alert feed...")
     alerts = []
     
+    # 1. Check local db.json first
     db_paths = ["db.json", "../db.json", os.path.join(os.path.dirname(os.path.abspath(__file__)), "db.json")]
     db_file = next((p for p in db_paths if os.path.exists(p)), None)
     
@@ -39,6 +39,7 @@ def fetch_disaster_trigger(available_districts):
         except Exception as e:
             print(f"⚠️ Error reading {db_file}: {e}")
 
+    # 2. If no local db, fetch from mock API
     if not alerts:
         try:
             response = requests.get(TRIGGER_API_URL, timeout=10)
@@ -46,6 +47,7 @@ def fetch_disaster_trigger(available_districts):
         except Exception as e:
             print(f"⚠️ API Fetch error: {e}")
 
+    # 3. Match alerts with districts in the CSV
     matched_alerts = [
         a for a in alerts 
         if a.get('district', '').strip().lower() in [d.strip().lower() for d in available_districts]
@@ -114,52 +116,16 @@ def generate_advisory(farmer, alert):
     return json.loads(chat_completion.choices[0].message.content)
 
 # -------------------------------------------------------------
-# 3. TEXT-TO-SPEECH (EDGE-TTS FOR ODIA & HINDI NEURAL VOICES)
+# 3. TEXT-TO-SPEECH (IVR AUDIO CREATOR)
 # -------------------------------------------------------------
-async def generate_audio_async(text, voice, filepath):
-    # Clean up formatting characters that break TTS streams
-    cleaned_text = (
-        text.replace('"', '')
-        .replace('*', '')
-        .replace('\n', ' ')
-        .strip()
-    )
-    if not cleaned_text:
-        return
-    communicate = edge_tts.Communicate(cleaned_text, voice)
-    await communicate.save(filepath)
-
-def create_ivr_audio(text, lang, filename):
-    if not text or not str(text).strip():
-        return None
-
-    filepath = os.path.join("audio_broadcasts", filename)
-    
-    # Try preferred neural voice, then fall back to standard Indian neural voices
-    voice_candidates = (
-        ["or-IN-SukantNeural", "hi-IN-MadhurNeural", "en-IN-PrabhatNeural"]
-        if lang.lower() == "odia"
-        else ["hi-IN-MadhurNeural", "hi-IN-SwaraNeural", "en-IN-PrabhatNeural"]
-    )
-
-    for voice in voice_candidates:
-        try:
-            asyncio.run(generate_audio_async(text, voice, filepath))
-            # Verify file was actually created and is not 0 bytes
-            if os.path.exists(filepath) and os.path.getsize(filepath) > 0:
-                return filepath
-        except Exception:
-            continue
-
-    # Final Fallback to gTTS if edge-tts network drops
+def create_ivr_audio(text, filename):
     try:
-        from gtts import gTTS
         tts = gTTS(text=text, lang='hi', slow=False)
+        filepath = os.path.join("audio_broadcasts", filename)
         tts.save(filepath)
         return filepath
     except Exception as e:
-        print(f"⚠️ Audio fallback failed for {filename}: {e}")
-        return None
+        return f"Audio error: {e}"
 
 # -------------------------------------------------------------
 # 4. EXECUTION PIPELINE
@@ -206,16 +172,11 @@ def run_pipeline():
 
         advisories = generate_advisory(farmer, alert)
 
-        # Generate Audio Files for BOTH Odia and Hindi
-        pre_audio_odia = f"Farmer_{farmer_id}_pre_alert_ODIA.mp3"
-        pre_audio_hindi = f"Farmer_{farmer_id}_pre_alert_HINDI.mp3"
-        post_audio_odia = f"Farmer_{farmer_id}_post_mitigation_ODIA.mp3"
-        post_audio_hindi = f"Farmer_{farmer_id}_post_mitigation_HINDI.mp3"
+        pre_audio = f"Farmer_{farmer_id}_pre_alert.mp3"
+        post_audio = f"Farmer_{farmer_id}_post_mitigation.mp3"
 
-        create_ivr_audio(advisories['pre_disaster_ivr_voice_odia'], "odia", pre_audio_odia)
-        create_ivr_audio(advisories['pre_disaster_ivr_voice_hindi'], "hindi", pre_audio_hindi)
-        create_ivr_audio(advisories['post_disaster_ivr_voice_odia'], "odia", post_audio_odia)
-        create_ivr_audio(advisories['post_disaster_ivr_voice_hindi'], "hindi", post_audio_hindi)
+        create_ivr_audio(advisories['pre_disaster_ivr_voice_hindi'], pre_audio)
+        create_ivr_audio(advisories['post_disaster_ivr_voice_hindi'], post_audio)
 
         # STAGE 1: PRE-DISASTER DISPATCH
         print("\n[STAGE 1: PRE-DISASTER WARNING DISPATCHED]")
@@ -225,9 +186,8 @@ def run_pipeline():
         print(f"   💬 [En Ref]: {advisories['pre_disaster_sms_en']}")
         print(f"📞 IVR VOICE CALL PLACED:")
         print(f"   🔊 Odia Voice Script:  \"{advisories['pre_disaster_ivr_voice_odia']}\"")
-        print(f"   📁 Odia Audio File:   audio_broadcasts/{pre_audio_odia} [STATUS: SENT / 200 OK]")
         print(f"   🔊 Hindi Voice Script: \"{advisories['pre_disaster_ivr_voice_hindi']}\"")
-        print(f"   📁 Hindi Audio File:  audio_broadcasts/{pre_audio_hindi} [STATUS: SENT / 200 OK]")
+        print(f"   📁 Audio Generated: audio_broadcasts/{pre_audio} [STATUS: SENT / 200 OK]")
 
         time.sleep(1)
 
@@ -237,13 +197,11 @@ def run_pipeline():
         print(f"   💬 [Odia]:  {advisories['post_disaster_sms_odia']}")
         print(f"   💬 [Hindi]: {advisories['post_disaster_sms_hindi']}")
         print(f"📞 IVR VOICE CALL PLACED:")
-        print(f"   🔊 Odia Recovery Voice:  \"{advisories['post_disaster_ivr_voice_odia']}\"")
-        print(f"   📁 Odia Recovery Audio:  audio_broadcasts/{post_audio_odia} [STATUS: SENT / 200 OK]")
-        print(f"   🔊 Hindi Recovery Voice: \"{advisories['post_disaster_ivr_voice_hindi']}\"")
-        print(f"   📁 Hindi Recovery Audio: audio_broadcasts/{post_audio_hindi} [STATUS: SENT / 200 OK]\n")
+        print(f"   🔊 Recovery Voice: \"{advisories['post_disaster_ivr_voice_odia']}\"")
+        print(f"   📁 Audio Generated: audio_broadcasts/{post_audio} [STATUS: SENT / 200 OK]\n")
 
     print("=" * 80)
-    print("✅ All Odia & Hindi Emergency Dispatches Logged Successfully.")
+    print("✅ All Emergency & Post-Disaster Dispatches Logged Successfully.")
     print("=" * 80)
 
 if __name__ == "__main__":

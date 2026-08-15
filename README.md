@@ -45,7 +45,7 @@ krishirakshak/
 ```
 
 
-##🚀 Getting Started
+## 🚀 Getting Started
 
 1. Clone the Repository
 ```Bash

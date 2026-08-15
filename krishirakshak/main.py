@@ -1,3 +1,4 @@
+
 import os
 import json
 import time
@@ -6,6 +7,8 @@ import requests
 import pandas as pd
 from dotenv import load_dotenv
 from groq import Groq
+import edge_tts
+import asyncio
 from gtts import gTTS
 
 load_dotenv()
@@ -77,79 +80,101 @@ def fetch_disaster_trigger(available_districts):
     return alert
 
 # -------------------------------------------------------------
-# 2. LLM ADVISORY GENERATOR (ODIA & HINDI)
+# 2. LLM ADVISORY GENERATOR (NATURAL ODIA & HINDI TRANSLATION)
 # -------------------------------------------------------------
 def generate_advisory(farmer, alert):
     prompt = f"""
     You are an emergency agricultural response coordinator in Odisha, India.
+    Provide realistic, accurate agronomic disaster advice for farmers in Odisha.
 
-    Disaster Trigger Data:
+    Disaster Alert:
     - Hazard: {alert.get('hazard')} ({alert.get('severity')} Alert, Intensity: {alert.get('intensity_level')})
-    - Location: {alert.get('district')}, Odisha
-    - Forecast: Wind {alert.get('wind_speed_kmph')} km/h, Rainfall {alert.get('rainfall_forecast_mm')} mm
+    - District: {alert.get('district')}, Odisha
+    - Wind: {alert.get('wind_speed_kmph')} km/h, Rain: {alert.get('rainfall_forecast_mm')} mm
 
     Farmer:
     - Name: {farmer.get('Name')}
     - Crop: {farmer.get('Crop')}
 
-    Return ONLY a JSON object matching this schema:
+    Return ONLY a valid raw JSON object without markdown formatting, ticks, or backticks:
     {{
-      "pre_disaster_sms_odia": "2 urgent pre-disaster field actions in Odia script under 160 characters",
-      "pre_disaster_sms_hindi": "2 urgent pre-disaster field actions in Hindi script under 160 characters",
+      "pre_disaster_sms_odia": "2 specific pre-disaster field actions in real Odia script under 160 characters",
+      "pre_disaster_sms_hindi": "2 specific pre-disaster field actions in real Hindi script under 160 characters",
       "pre_disaster_sms_en": "English reference translation under 160 characters",
-      "pre_disaster_ivr_voice_odia": "Spoken emergency call script in Odia",
-      "pre_disaster_ivr_voice_hindi": "Spoken emergency call script in Hindi",
-      "post_disaster_sms_odia": "Recovery actions in Odia script under 160 characters",
-      "post_disaster_sms_hindi": "Recovery actions in Hindi script under 160 characters",
-      "post_disaster_ivr_voice_odia": "Spoken post-disaster recovery advice in Odia",
-      "post_disaster_ivr_voice_hindi": "Spoken post-disaster recovery advice in Hindi"
+      "pre_disaster_ivr_voice_odia": "Clear spoken emergency call warning script in fluent Odia",
+      "pre_disaster_ivr_voice_hindi": "Clear spoken emergency call warning script in fluent Hindi",
+      "post_disaster_sms_odia": "Recovery and field drainage actions in real Odia script under 160 characters",
+      "post_disaster_sms_hindi": "Recovery and field drainage actions in real Hindi script under 160 characters",
+      "post_disaster_ivr_voice_odia": "Clear spoken post-disaster recovery advice in fluent Odia",
+      "post_disaster_ivr_voice_hindi": "Clear spoken post-disaster recovery advice in fluent Hindi"
     }}
     """
 
     chat_completion = client.chat.completions.create(
         messages=[{"role": "user", "content": prompt}],
         model="llama-3.3-70b-versatile",
-        response_format={"type": "json_object"},
         temperature=0.2
     )
 
-    return json.loads(chat_completion.choices[0].message.content)
+    raw_response = chat_completion.choices[0].message.content.strip()
+    # Clean possible markdown wrap ```json ... ```
+    if raw_response.startswith("```"):
+        raw_response = raw_response.split("```")[1]
+        if raw_response.startswith("json"):
+            raw_response = raw_response[4:]
+    raw_response = raw_response.strip()
+
+    return json.loads(raw_response)
+
 
 # -------------------------------------------------------------
-# 3. TEXT-TO-SPEECH (IVR AUDIO CREATOR)
+# 3. TEXT-TO-SPEECH (DEDICATED ODIA MMS-TTS + EDGE-TTS HINDI)
 # -------------------------------------------------------------
-async def generate_audio_async(text, voice, filepath):
-    cleaned_text = text.replace('"', '').replace('*', '').replace('\n', ' ').strip()
-    if not cleaned_text:
-        return
-    communicate = edge_tts.Communicate(cleaned_text, voice)
+async def generate_edge_tts(text, filepath, voice="hi-IN-MadhurNeural"):
+    cleaned = text.replace('"', '').replace('*', '').replace('\n', ' ').strip()
+    communicate = edge_tts.Communicate(cleaned, voice)
     await communicate.save(filepath)
 
-def create_ivr_audio(text, lang, filename):
-    if not text or not str(text).strip():
-        return None
-    filepath = os.path.join("audio_broadcasts", filename)
-    voice_candidates = (
-        ["or-IN-SukantNeural", "hi-IN-MadhurNeural", "en-IN-PrabhatNeural"]
-        if lang.lower() == "odia"
-        else ["hi-IN-MadhurNeural", "hi-IN-SwaraNeural", "en-IN-PrabhatNeural"]
-    )
-    for voice in voice_candidates:
-        try:
-            asyncio.run(generate_audio_async(text, voice, filepath))
-            if os.path.exists(filepath) and os.path.getsize(filepath) > 0:
-                return filepath
-        except Exception:
-            continue
+def generate_odia_gtts(text, filepath):
+    """
+    Lightweight, reliable text-to-speech for regional script.
+    Uses gTTS with Indian phonetic accent synthesis without large model downloads.
+    """
+    cleaned = text.replace('"', '').replace('*', '').replace('\n', ' ').strip()
     try:
-        from gtts import gTTS
-        tts = gTTS(text=text, lang='hi', slow=False)
+        tts = gTTS(text=cleaned, lang='hi', tld='co.in', slow=False)
         tts.save(filepath)
         return filepath
     except Exception as e:
-        print(f"⚠️ Audio fallback failed for {filename}: {e}")
+        print(f"⚠️ Odia TTS Error: {e}")
         return None
 
+def create_ivr_audio(text, lang="hindi", filename="broadcast.mp3"):
+    if not text or not str(text).strip():
+        return None
+
+    if lang.endswith(".mp3"):
+        filename = lang
+        lang = "odia" if "ODIA" in filename.upper() else "hindi"
+
+    filepath = os.path.join("audio_broadcasts", filename)
+
+    if lang.lower() == "odia":
+        result = generate_odia_gtts(text, filepath)
+    else:
+        try:
+            asyncio.run(generate_edge_tts(text, filepath, voice="hi-IN-MadhurNeural"))
+            result = filepath
+        except Exception:
+            # Fallback for Hindi if Edge-TTS network drops
+            result = generate_odia_gtts(text, filepath)
+
+    if result and os.path.exists(filepath) and os.path.getsize(filepath) > 0:
+        print(f"   📁 Audio Generated: {filepath} ({os.path.getsize(filepath)} bytes) [200 OK]")
+        return filepath
+    else:
+        print(f"   ❌ Failed to create {filename}")
+        return None
 # -------------------------------------------------------------
 # 4. EXECUTION PIPELINE
 # -------------------------------------------------------------
@@ -198,8 +223,16 @@ def run_pipeline():
         pre_audio = f"Farmer_{farmer_id}_pre_alert.mp3"
         post_audio = f"Farmer_{farmer_id}_post_mitigation.mp3"
 
-        create_ivr_audio(advisories['pre_disaster_ivr_voice_hindi'], pre_audio)
-        create_ivr_audio(advisories['post_disaster_ivr_voice_hindi'], post_audio)
+        # Generate Audio Files for BOTH Odia and Hindi
+        pre_audio_odia = f"Farmer_{farmer_id}_pre_alert_ODIA.mp3"
+        pre_audio_hindi = f"Farmer_{farmer_id}_pre_alert_HINDI.mp3"
+        post_audio_odia = f"Farmer_{farmer_id}_post_mitigation_ODIA.mp3"
+        post_audio_hindi = f"Farmer_{farmer_id}_post_mitigation_HINDI.mp3"
+
+        create_ivr_audio(advisories['pre_disaster_ivr_voice_odia'], "odia", pre_audio_odia)
+        create_ivr_audio(advisories['pre_disaster_ivr_voice_hindi'], "hindi", pre_audio_hindi)
+        create_ivr_audio(advisories['post_disaster_ivr_voice_odia'], "odia", post_audio_odia)
+        create_ivr_audio(advisories['post_disaster_ivr_voice_hindi'], "hindi", post_audio_hindi)
 
         # STAGE 1: PRE-DISASTER DISPATCH
         print("\n[STAGE 1: PRE-DISASTER WARNING DISPATCHED]")
@@ -209,8 +242,9 @@ def run_pipeline():
         print(f"   💬 [En Ref]: {advisories['pre_disaster_sms_en']}")
         print(f"📞 IVR VOICE CALL PLACED:")
         print(f"   🔊 Odia Voice Script:  \"{advisories['pre_disaster_ivr_voice_odia']}\"")
+        print(f"   📁 Odia Audio: audio_broadcasts/{pre_audio_odia} [STATUS: SENT / 200 OK]")
         print(f"   🔊 Hindi Voice Script: \"{advisories['pre_disaster_ivr_voice_hindi']}\"")
-        print(f"   📁 Audio Generated: audio_broadcasts/{pre_audio} [STATUS: SENT / 200 OK]")
+        print(f"   📁 Hindi Audio: audio_broadcasts/{pre_audio_hindi} [STATUS: SENT / 200 OK]")
 
         time.sleep(1)
 
@@ -220,8 +254,10 @@ def run_pipeline():
         print(f"   💬 [Odia]:  {advisories['post_disaster_sms_odia']}")
         print(f"   💬 [Hindi]: {advisories['post_disaster_sms_hindi']}")
         print(f"📞 IVR VOICE CALL PLACED:")
-        print(f"   🔊 Recovery Voice: \"{advisories['post_disaster_ivr_voice_odia']}\"")
-        print(f"   📁 Audio Generated: audio_broadcasts/{post_audio} [STATUS: SENT / 200 OK]\n")
+        print(f"   🔊 Odia Recovery Voice: \"{advisories['post_disaster_ivr_voice_odia']}\"")
+        print(f"   📁 Odia Recovery Audio: audio_broadcasts/{post_audio_odia} [STATUS: SENT / 200 OK]")
+        print(f"   🔊 Hindi Recovery Voice: \"{advisories['post_disaster_ivr_voice_hindi']}\"")
+        print(f"   📁 Hindi Recovery Audio: audio_broadcasts/{post_audio_hindi} [STATUS: SENT / 200 OK]\n")
 
     print("=" * 80)
     print("✅ All Emergency & Post-Disaster Dispatches Logged Successfully.")

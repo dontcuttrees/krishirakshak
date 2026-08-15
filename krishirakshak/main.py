@@ -1,6 +1,7 @@
 import os
 import json
 import time
+import random
 import requests
 import pandas as pd
 from dotenv import load_dotenv
@@ -17,43 +18,63 @@ client = Groq(api_key=GROQ_API_KEY)
 os.makedirs("audio_broadcasts", exist_ok=True)
 
 # -------------------------------------------------------------
-# 1. FETCH LIVE DISASTER TRIGGER FROM API
+# 1. FETCH RANDOM DISASTER TRIGGER FROM LOCAL DB OR API
 # -------------------------------------------------------------
 TRIGGER_API_URL = "https://run.mocky.io/v3/46bc7793-1b9a-4c28-be9c-73ec56a90dc2"
 
-def fetch_disaster_trigger_from_api(target_district):
-    print(f"📡 Fetching live IMD disaster alert feed from API for {target_district}...")
-    try:
-        response = requests.get(TRIGGER_API_URL, timeout=10)
-        alerts = response.json()
-        
-        # Filter alert for the requested district
-        matched = [a for a in alerts if a['district'].lower() == target_district.lower()]
-        
-        if matched:
-            alert = matched[0]
-        else:
-            alert = alerts[0] # Default to the primary active alert
+def fetch_disaster_trigger(available_districts):
+    print("📡 Fetching IMD disaster alert feed...")
+    alerts = []
+    
+    # 1. Check local db.json first
+    db_paths = ["db.json", "../db.json", os.path.join(os.path.dirname(os.path.abspath(__file__)), "db.json")]
+    db_file = next((p for p in db_paths if os.path.exists(p)), None)
+    
+    if db_file:
+        try:
+            with open(db_file, "r", encoding="utf-8") as f:
+                data = json.load(f)
+                alerts = data.get("alerts", [])
+                print(f"📂 Loaded {len(alerts)} alerts from local {db_file}")
+        except Exception as e:
+            print(f"⚠️ Error reading {db_file}: {e}")
 
-        print("\n" + "="*80)
-        print(f"🚨 [IMD DISASTER ALERT RECEIVED VIA API: {alert['alert_id']}]")
-        print(f"📍 Location: {alert['district']}, Odisha")
-        print(f"⚠️ Hazard: {alert['hazard']} | Severity: {alert['severity']} ALERT | Level: {alert['intensity_level']}")
-        print(f"📊 Forecast: Wind {alert['wind_speed_kmph']} km/h | 24h Rain {alert['rainfall_forecast_mm']} mm")
-        print("="*80 + "\n")
-        return alert
+    # 2. If no local db, fetch from mock API
+    if not alerts:
+        try:
+            response = requests.get(TRIGGER_API_URL, timeout=10)
+            alerts = response.json()
+        except Exception as e:
+            print(f"⚠️ API Fetch error: {e}")
 
-    except Exception as e:
-        print(f"⚠️ API Fetch error: {e}. Falling back to default payload.")
-        return {
+    # 3. Match alerts with districts in the CSV
+    matched_alerts = [
+        a for a in alerts 
+        if a.get('district', '').strip().lower() in [d.strip().lower() for d in available_districts]
+    ]
+
+    if matched_alerts:
+        alert = random.choice(matched_alerts)
+    elif alerts:
+        alert = random.choice(alerts)
+    else:
+        alert = {
             "alert_id": "IMD-OD-FALLBACK-01",
-            "district": target_district,
+            "district": random.choice(available_districts) if available_districts else "Angul",
             "hazard": "Severe Flash Flood & Inundation",
             "severity": "RED",
             "wind_speed_kmph": 95,
             "rainfall_forecast_mm": 190,
             "intensity_level": "High"
         }
+
+    print("\n" + "="*80)
+    print(f"🚨 [IMD DISASTER ALERT TRIGGERED: {alert.get('alert_id', 'IMD-OD-01')}]")
+    print(f"📍 Location: {alert.get('district')}, Odisha")
+    print(f"⚠️ Hazard: {alert.get('hazard')} | Severity: {alert.get('severity')} ALERT | Level: {alert.get('intensity_level')}")
+    print(f"📊 Forecast: Wind {alert.get('wind_speed_kmph')} km/h | 24h Rain {alert.get('rainfall_forecast_mm')} mm")
+    print("="*80 + "\n")
+    return alert
 
 # -------------------------------------------------------------
 # 2. LLM ADVISORY GENERATOR (ODIA & HINDI)
@@ -63,13 +84,13 @@ def generate_advisory(farmer, alert):
     You are an emergency agricultural response coordinator in Odisha, India.
 
     Disaster Trigger Data:
-    - Hazard: {alert['hazard']} ({alert['severity']} Alert, Intensity: {alert['intensity_level']})
-    - Location: {alert['district']}, Odisha
-    - Forecast: Wind {alert['wind_speed_kmph']} km/h, Rainfall {alert['rainfall_forecast_mm']} mm
+    - Hazard: {alert.get('hazard')} ({alert.get('severity')} Alert, Intensity: {alert.get('intensity_level')})
+    - Location: {alert.get('district')}, Odisha
+    - Forecast: Wind {alert.get('wind_speed_kmph')} km/h, Rainfall {alert.get('rainfall_forecast_mm')} mm
 
     Farmer:
-    - Name: {farmer['Name']}
-    - Crop: {farmer['Crop']}
+    - Name: {farmer.get('Name')}
+    - Crop: {farmer.get('Crop')}
 
     Return ONLY a JSON object matching this schema:
     {{
@@ -110,36 +131,37 @@ def create_ivr_audio(text, filename):
 # 4. EXECUTION PIPELINE
 # -------------------------------------------------------------
 def run_pipeline():
-    # 1. Resolve farmers.csv path dynamically across root and subfolders
     csv_candidates = [
         "farmers_fake_names.csv",
+        "farmers.csv",
         "../farmers_fake_names.csv",
+        "../farmers.csv",
         os.path.join(os.path.dirname(os.path.abspath(__file__)), "farmers_fake_names.csv"),
-        os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "farmers_fake_names.csv")
+        os.path.join(os.path.dirname(os.path.abspath(__file__)), "farmers.csv")
     ]
     
     csv_file = next((path for path in csv_candidates if os.path.exists(path)), None)
     
     if not csv_file:
-        print("❌ Error: 'farmers_fake_names.csv' not found in current directory or parent directory.")
+        print("❌ Error: Farmer CSV not found.")
         return
 
     print(f"📂 Loaded dataset from: {csv_file}")
     df = pd.read_csv(csv_file)
     df.columns = df.columns.str.strip()
 
-    # Target the district from your CSV (e.g. Angul)
-    target_district = df['District'].dropna().iloc[0]
+    available_districts = df['District'].dropna().unique().tolist()
     
-    # 2. Fetch Alert from Trigger API
-    alert = fetch_disaster_trigger_from_api(target_district)
+    # 1. Fetch Random Alert Trigger
+    alert = fetch_disaster_trigger(available_districts)
+    target_district = alert['district']
 
-    # 3. Filter affected farmers
+    # 2. Filter affected farmers
     affected = df[df['District'].astype(str).str.strip().str.lower() == target_district.lower()]
     print(f"🎯 Target Audience: Found {len(affected)} registered farmer(s) in {target_district}.\n")
 
     for idx, farmer in affected.iterrows():
-        farmer_id = farmer['FarmerID']
+        farmer_id = farmer.get('FarmerID', farmer.get('Farmer_ID', idx + 1))
         name = farmer['Name']
         phone = farmer['Phone']
         crop = farmer['Crop']

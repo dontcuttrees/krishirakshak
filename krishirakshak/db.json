@@ -8,6 +8,116 @@
       "wind_speed_kmph": 110,
       "rainfall_forecast_mm": 215,
       "intensity_level": "High"
+    },
+    {
+      "alert_id": "IMD-OD-ANG-01",
+      "district": "Angul",
+      "hazard": "Severe Flash Flood & Inundation",
+      "severity": "RED",
+      "wind_speed_kmph": 70,
+      "rainfall_forecast_mm": 215,
+      "intensity_level": "High",
+      "eta_hours": 12,
+      "issued_by": "IMD Regional Meteorological Centre, Bhubaneswar"
+    },
+    {
+      "alert_id": "IMD-OD-PUR-02",
+      "district": "Puri",
+      "hazard": "Very Severe Cyclonic Storm (Landfall Warning)",
+      "severity": "RED",
+      "wind_speed_kmph": 135,
+      "rainfall_forecast_mm": 250,
+      "intensity_level": "Severe",
+      "eta_hours": 18,
+      "issued_by": "IMD Regional Meteorological Centre, Bhubaneswar"
+    },
+    {
+      "alert_id": "IMD-OD-BAL-03",
+      "district": "Balasore",
+      "hazard": "Heavy Coastal Inundation & Gale Winds",
+      "severity": "ORANGE",
+      "wind_speed_kmph": 85,
+      "rainfall_forecast_mm": 160,
+      "intensity_level": "Moderate",
+      "eta_hours": 24,
+      "issued_by": "IMD Regional Meteorological Centre, Bhubaneswar"
+    },
+    {
+      "alert_id": "IMD-OD-GAN-04",
+      "district": "Ganjam",
+      "hazard": "Deep Depression & Heavy Downpour",
+      "severity": "ORANGE",
+      "wind_speed_kmph": 65,
+      "rainfall_forecast_mm": 140,
+      "intensity_level": "Moderate",
+      "eta_hours": 30,
+      "issued_by": "IMD Regional Meteorological Centre, Bhubaneswar"
+    },
+    {
+      "alert_id": "IMD-OD-CUT-05",
+      "district": "Cuttack",
+      "hazard": "Mahanadi River Basin Overflow & Flash Flood",
+      "severity": "RED",
+      "wind_speed_kmph": 50,
+      "rainfall_forecast_mm": 230,
+      "intensity_level": "High",
+      "eta_hours": 16,
+      "issued_by": "IMD Regional Meteorological Centre, Bhubaneswar"
+    },
+    {
+      "alert_id": "IMD-OD-BHA-06",
+      "district": "Bhadrak",
+      "hazard": "Saline Ingress & High Tidal Surges",
+      "severity": "RED",
+      "wind_speed_kmph": 110,
+      "rainfall_forecast_mm": 190,
+      "intensity_level": "High",
+      "eta_hours": 20,
+      "issued_by": "IMD Regional Meteorological Centre, Bhubaneswar"
+    },
+    {
+      "alert_id": "IMD-OD-KEN-07",
+      "district": "Kendrapara",
+      "hazard": "Cyclonic Depression & Silt Inundation",
+      "severity": "ORANGE",
+      "wind_speed_kmph": 90,
+      "rainfall_forecast_mm": 175,
+      "intensity_level": "Moderate",
+      "eta_hours": 28,
+      "issued_by": "IMD Regional Meteorological Centre, Bhubaneswar"
+    },
+    {
+      "alert_id": "IMD-OD-MAY-08",
+      "district": "Mayurbhanj",
+      "hazard": "Localized Cloudburst & Flash Stream Runoff",
+      "severity": "YELLOW",
+      "wind_speed_kmph": 45,
+      "rainfall_forecast_mm": 95,
+      "intensity_level": "Low",
+      "eta_hours": 36,
+      "issued_by": "IMD Regional Meteorological Centre, Bhubaneswar"
+    },
+    {
+      "alert_id": "IMD-OD-KHO-09",
+      "district": "Khordha",
+      "hazard": "Squally Winds & Waterlogging",
+      "severity": "YELLOW",
+      "wind_speed_kmph": 55,
+      "rainfall_forecast_mm": 85,
+      "intensity_level": "Low",
+      "eta_hours": 42,
+      "issued_by": "IMD Regional Meteorological Centre, Bhubaneswar"
+    },
+    {
+      "alert_id": "IMD-OD-SAM-10",
+      "district": "Sambalpur",
+      "hazard": "Hirakud Dam Reservoir Backwater Surge",
+      "severity": "ORANGE",
+      "wind_speed_kmph": 40,
+      "rainfall_forecast_mm": 165,
+      "intensity_level": "Moderate",
+      "eta_hours": 22,
+      "issued_by": "IMD Regional Meteorological Centre, Bhubaneswar"
     }
   ]
 }
